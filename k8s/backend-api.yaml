@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bedrock-api
+  namespace: bedrock-ai-prod
+  labels:
+    app: bedrock-api
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: bedrock-api
+  template:
+    metadata:
+      labels:
+        app: bedrock-api
+    spec:
+      serviceAccountName: bedrock-access-sa # IAM Roles for Service Accounts (IRSA)
+      containers:
+      - name: gateway
+        image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/devopstrio/bedrock-api:v1.0.0
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: ai-secrets
+              key: db-url
+        - name: OPENSEARCH_ENDPOINT
+          value: "https://vdb-avd-ai.us-east-1.aoss.amazonaws.com"
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2000m"
+            memory: "4Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bedrock-api-svc
+  namespace: bedrock-ai-prod
+spec:
+  selector:
+    app: bedrock-api
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8000
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-engine
+  namespace: bedrock-ai-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      component: rag-engine
+  template:
+    metadata:
+      labels:
+        component: rag-engine
+    spec:
+      containers:
+      - name: worker
+        image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/devopstrio/rag-engine:latest
+        resources:
+          requests:
+            cpu: "1000m"
+            memory: "2Gi"
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bedrock-ingress
+  namespace: bedrock-ai-prod
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+spec:
+  rules:
+  - host: ai.devopstrio.co.uk
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: bedrock-api-svc
+            port:
+              number: 80

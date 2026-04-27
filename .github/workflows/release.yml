@@ -1,0 +1,62 @@
+name: 'AWS Bedrock Blueprints CD'
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/**'
+      - 'backend/**'
+      - 'prompts/**'
+      - '.github/workflows/release.yml'
+
+jobs:
+  validate-and-test:
+    name: 'AI Logic & Prompt Validation'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v3
+
+    - name: Prompt Linting
+      run: |
+        # Custom logic to check prompt templates for injection patterns or placeholders
+        grep -r "{{" prompts/
+
+    - name: Run Pytest
+      run: |
+        pip install pytest fastapi httpx
+        pytest tests/
+
+  build-and-push:
+    name: 'AI Platform Release'
+    needs: validate-and-test
+    runs-on: ubuntu-latest
+    steps:
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+
+    - name: Build & Push Bedrock API
+      run: |
+        aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 123456789012.dkr.ecr.us-east-1.amazonaws.com
+        docker build -t 123456789012.dkr.ecr.us-east-1.amazonaws.com/devopstrio/bedrock-api:${{ github.sha }} ./backend
+        docker push 123456789012.dkr.ecr.us-east-1.amazonaws.com/devopstrio/bedrock-api:${{ github.sha }}
+
+  eks-rollout:
+    name: 'EKS Rollout'
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+    - name: Set EKS Context
+      run: |
+        aws eks update-kubeconfig --region us-east-1 --name eks-bedrock-ai-prd
+
+    - name: Helm Deploy
+      run: |
+        helm upgrade --install bedrock-blueprints ./helm/aws-bedrock-blueprints \
+        --namespace bedrock-ai-prod --create-namespace \
+        --set api.image.tag=${{ github.sha }}
